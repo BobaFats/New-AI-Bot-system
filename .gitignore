@@ -1,0 +1,22 @@
+# Секреты: токены и ключи НИКОГДА не попадают в GitHub
+.env
+*.env
+!.env.example
+
+# Локальная база данных SQLite
+*.db
+*.db-journal
+
+# Логи
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Редакторы
+.vscode/
+.idea/

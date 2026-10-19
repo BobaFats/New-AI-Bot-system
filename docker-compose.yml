@@ -1,0 +1,53 @@
+# docker-compose.yml — описание всех сервисов, которые запускаются вместе на сервере.
+# Запуск:     docker compose up -d --build     (-d = в фоне, --build = пересобрать образ)
+# Логи бота:  docker compose logs -f bot
+# Остановка:  docker compose down
+
+services:
+  # --- Сам бот ---
+  bot:
+    build: .                 # собрать образ по Dockerfile из этой папки
+    restart: unless-stopped  # автоматически перезапускать при падении и после перезагрузки сервера
+    env_file: .env           # секреты и настройки — из файла .env на сервере
+    environment:
+      # Внутри Docker база данных доступна по имени сервиса "db".
+      DATABASE_URL: postgresql+asyncpg://bot:${POSTGRES_PASSWORD}@db:5432/bot
+    depends_on:
+      db:
+        condition: service_healthy  # ждать, пока PostgreSQL будет готов
+
+  # --- База данных PostgreSQL ---
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bot
+      POSTGRES_DB: bot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}  # задаётся в .env
+    volumes:
+      # Данные БД хранятся в томе — не пропадут при пересоздании контейнера.
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot"]
+      interval: 5s
+      retries: 10
+
+  # --- Caddy: веб-сервер, который сам получает HTTPS-сертификат ---
+  # Jivo отправляет запросы только на https://, Caddy это обеспечивает.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}  # ваш домен, задаётся в .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - bot
+
+volumes:
+  pgdata:
+  caddy_data:

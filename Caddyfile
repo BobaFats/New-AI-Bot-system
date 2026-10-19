@@ -1,0 +1,5 @@
+# Caddy принимает HTTPS-запросы на ваш домен и передаёт их боту.
+# Сертификат Let's Encrypt Caddy получает и продлевает сам.
+{$DOMAIN} {
+	reverse_proxy bot:8000
+}
