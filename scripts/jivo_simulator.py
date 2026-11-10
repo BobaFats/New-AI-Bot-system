@@ -9,7 +9,7 @@
 Как запустить (два терминала, оба в папке Bot с активированным .venv):
   1) В .env должно быть: JIVO_API_BASE=http://127.0.0.1:9000/webhooks
      Терминал 1:  uvicorn app.main:app --reload --port 8000
-  2) Терминал 2:  python scripts/jivo_simulator.py --token ТОКЕН_КОМПАНИИ
+  2) Терминал 2:  python scripts/jivo_simulator.py --token [ваш токен]
      (токен показывает команда: python -m app.cli list-tenants)
 
 Команды в симуляторе:

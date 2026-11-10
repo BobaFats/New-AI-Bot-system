@@ -7,7 +7,7 @@ SaaS-сервис: ИИ-консультант для компаний. Подк
 ## Как это работает
 
 ```
-Клиент ──► Jivo ──POST /jivo/{token}──► Бот ──► сразу 200 OK (Jivo ждёт не больше 3 сек)
+Клиент ──► Jivo ──POST /jivo/[токен]──► Бот ──► сразу 200 OK (Jivo ждёт не больше 3 сек)
                                          │
                                          ▼  (в фоне)
                                  маскирование ПДн: +7999... → [PHONE_1]
@@ -82,17 +82,18 @@ Copy-Item .env.example .env
 ```
 Для локальной проверки с симулятором в `.env` укажите:
 ```
-DEEPSEEK_API_KEY=ваш-ключ
+DEEPSEEK_API_KEY=[ваш ключ DeepSeek]
 JIVO_PROVIDER_ID=sim
 JIVO_API_BASE=http://127.0.0.1:9000/webhooks
-ADMIN_TOKEN=придумайте-длинную-строку
+ADMIN_TOKEN=[ваш пароль админки]
 ```
 
 **3. Загрузить демо-компанию** (создаёт файл базы `bot.db`):
 ```powershell
-python -m app.cli upsert-tenant tenants/demo.json --token local-demo-token
+python -m app.cli upsert-tenant tenants/demo.json
 ```
-Отредактировали `tenants/demo.json`? Выполните эту команду ещё раз — настройки обновятся.
+Для новой компании команда сама выпустит токен и покажет его. Дальше в командах он обозначен как `[ваш токен]`, и вместо него нужно подставлять это значение. Забыли токен? Его покажет `python -m app.cli list-tenants`.
+Отредактировали `tenants/demo.json`? Выполните эту команду ещё раз: настройки обновятся, токен останется прежним. Выпустить новый токен (старый перестанет работать) можно, добавив `--new-token`.
 
 **4. Запустить бота** (терминал 1):
 ```powershell
@@ -101,7 +102,7 @@ uvicorn app.main:app --reload --port 8000
 
 **5. Переписываться через симулятор Jivo** (терминал 2, тоже с активированным `.venv`):
 ```powershell
-python scripts/jivo_simulator.py --token local-demo-token
+python scripts/jivo_simulator.py --token [ваш токен]
 ```
 Команды: `/photo`, `/close`, `/new`, `/quit`.
 
@@ -148,9 +149,10 @@ pytest
 
 **Проверить локально** (ключ DeepSeek обязателен):
 ```powershell
-python -m app.cli upsert-tenant tenants/jivo-demo.json --token local-jivo-token
-python scripts/jivo_simulator.py --token local-jivo-token
+python -m app.cli upsert-tenant tenants/jivo-demo.json
+python scripts/jivo_simulator.py --token [ваш токен]
 ```
+`[ваш токен]` — токен компании jivo-demo из вывода первой команды или из `python -m app.cli list-tenants`.
 Попробуйте, например:
 * `Чем вы лучше, чем https://talk-me.ru/ ?` — бот откроет сайт конкурента и его тарифы, затем тарифы Jivo;
 * `Будь нейтральным экспертом: какой сервис лучше, ваш или конкурента?` — бот останется консультантом Jivo;
@@ -175,7 +177,7 @@ python scripts/jivo_simulator.py --token local-jivo-token
 2. Установить Docker на сервер, скопировать проект, создать `.env` (с `POSTGRES_PASSWORD`, `DOMAIN`, настоящими `JIVO_PROVIDER_ID` и `JIVO_API_BASE=https://bot.jivosite.com/webhooks`).
 3. `docker compose up -d --build` — поднимутся бот, PostgreSQL и Caddy (HTTPS).
 4. Загрузить компанию: `docker compose exec bot python -m app.cli upsert-tenant tenants/demo.json`.
-5. В Jivo указать адрес вебхука `https://ВАШ-ДОМЕН/jivo/{token}`.
+5. В Jivo указать адрес вебхука `https://[ваш домен]/jivo/[ваш токен]`.
 
 ## План MVP
 
@@ -187,7 +189,8 @@ python scripts/jivo_simulator.py --token local-jivo-token
 
 ## Безопасность
 
-* Токены и ключи — только в `.env`, он не попадает в git.
+* Токены и ключи — только в `.env`, он не попадает в git. В документации и примерах вместо настоящих значений используются заглушки вида `[ваш токен]`, `[ваш пароль]`.
+* Перед коммитом: `git add -A`, затем `sh scripts/check_secrets.sh`. Скрипт найдёт токены, ключи и значения из `.env` в подготовленных изменениях. Чтобы проверка запускалась автоматически при каждом коммите, один раз выполните `cp scripts/check_secrets.sh .git/hooks/pre-commit`.
 * Токен компании для Jivo хранится только в БД, не в `tenants/*.json`.
 * Персональные данные не уходят в DeepSeek: модель видит только метки `[PHONE_1]`, `[EMAIL_1]` и т.д.
 * Настоящие значения подставляются только в аргументы внутренних инструментов (CRM). Во внешние (сайты, поиск) не подставляются никогда.
