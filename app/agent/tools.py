@@ -11,17 +11,22 @@
 У каждого инструмента есть обязательный параметр reason — модель пишет,
 ПОЧЕМУ она его вызывает. Причина попадает в журнал (требование: логировать причины решений).
 
-Чтобы добавить новый инструмент (CRM, поиск по базе и т.д.), достаточно
-создать объект Tool и добавить его в список в get_tools().
+Набор инструментов для конкретной компании собирается в app/agent/registry.py.
 """
+
+from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.pii import PiiVault
 from app.tenant_settings import TenantSettings
+
+if TYPE_CHECKING:  # импорт только для подсказок типов, чтобы не было циклического импорта
+    from app.services import Services
 
 
 @dataclass
@@ -34,9 +39,13 @@ class ToolContext:
     client_id: str
     vault: PiiVault
     session: AsyncSession
+    services: Services | None = None
     # Флаги, которые инструменты выставляют для оркестратора:
     invite_agent: bool = False
     invite_reason: str = ""
+    # Счётчики для лимитов на одно сообщение клиента.
+    pages_opened: int = 0
+    searches_done: int = 0
     extra: dict = field(default_factory=dict)
 
 
@@ -48,6 +57,11 @@ class Tool:
     parameters: dict
     # Функция-обработчик: получает контекст и аргументы, возвращает текст для модели.
     handler: Callable[[ToolContext, dict], Awaitable[str]]
+    # Подставлять ли в аргументы реальные персональные данные вместо меток ([PHONE_1] -> 7999...).
+    # Нужно для CRM (искать клиента по настоящему телефону).
+    # ЗАПРЕЩЕНО для инструментов, которые отправляют аргументы во внешний мир (сайты, поиск):
+    # иначе текст чужого сайта мог бы заставить модель «утащить» телефон клиента в адресе запроса.
+    unmask_args: bool = True
 
     def schema(self) -> dict:
         """Описание инструмента в формате, который понимает API модели."""
@@ -85,8 +99,3 @@ INVITE_AGENT = Tool(
     parameters={"properties": {}, "required": []},
     handler=_invite_agent,
 )
-
-
-def get_tools(settings: TenantSettings) -> list[Tool]:
-    """Набор инструментов для компании. Позже здесь добавятся CRM, поиск по базе, сайт."""
-    return [INVITE_AGENT]

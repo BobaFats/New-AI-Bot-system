@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     # Секрет для доступа к админке (передаётся в заголовке X-Admin-Token).
     admin_token: str = ""
 
+    # --- Веб: поиск и открытие сайтов ---
+    # Провайдер поиска: "yandex" (Yandex Search API) или "none" (поиск выключен;
+    # открывать сайты по ссылкам бот всё равно сможет).
+    search_provider: str = "none"
+    yandex_search_api_key: str = ""
+    yandex_folder_id: str = ""
+    # Как бот представляется сайтам (заголовок User-Agent).
+    web_user_agent: str = "AIBotForJivo/0.2 (+https://github.com/BobaFats/New-AI-Bot-system)"
+
     log_level: str = "INFO"
 
 

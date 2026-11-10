@@ -37,10 +37,14 @@ class LlmReply:
 
 
 class LlmClient(Protocol):
-    """Интерфейс: любой клиент модели должен уметь chat(...)."""
+    """
+    Интерфейс: любой клиент модели должен уметь chat(...).
+    json_mode=True — попросить модель ответить строго в формате JSON (нужно контролёру).
+    """
 
     async def chat(
-        self, messages: list[dict], tools: list[dict], model: str, temperature: float, max_tokens: int
+        self, messages: list[dict], tools: list[dict], model: str, temperature: float, max_tokens: int,
+        json_mode: bool = False,
     ) -> LlmReply: ...
 
 
@@ -54,8 +58,13 @@ class DeepSeekClient:
         )
 
     async def chat(
-        self, messages: list[dict], tools: list[dict], model: str, temperature: float, max_tokens: int
+        self, messages: list[dict], tools: list[dict], model: str, temperature: float, max_tokens: int,
+        json_mode: bool = False,
     ) -> LlmReply:
+        extra = {}
+        if json_mode:
+            # Режим JSON у DeepSeek: в промпте обязательно должно быть слово «JSON».
+            extra["response_format"] = {"type": "json_object"}
         resp = await self.client.chat.completions.create(
             model=model,
             messages=messages,
@@ -63,6 +72,7 @@ class DeepSeekClient:
             tools=tools or None,
             temperature=temperature,
             max_tokens=max_tokens,
+            **extra,
         )
         msg = resp.choices[0].message
         calls = [

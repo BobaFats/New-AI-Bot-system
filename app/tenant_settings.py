@@ -32,6 +32,9 @@ class LlmSettings(BaseModel):
     # Сколько раз подряд модель может вызвать инструменты, прежде чем ответить.
     # Защита от зацикливания.
     max_tool_rounds: int = 5
+    # Результаты инструментов из ПРОШЛЫХ сообщений (например, текст сайта) обрезаются
+    # до этого числа символов: модель их уже пересказала, а платить за них каждый раз дорого.
+    history_tool_chars: int = 1500
 
 
 class Texts(BaseModel):
@@ -43,12 +46,47 @@ class Texts(BaseModel):
     agent_unavailable: str = (
         "Сейчас все менеджеры заняты. Оставьте, пожалуйста, телефон или email — мы свяжемся с вами."
     )
+    # Отправляется, если контролёр дважды отклонил ответ (см. app/agent/guard.py).
+    comparison_fallback: str = (
+        "Давайте я расскажу, чем мы можем быть полезны именно вам. Что для вас сейчас важнее всего? "
+        "Если хотите, подключу менеджера — он подробно разберёт ваш вопрос."
+    )
+
+
+class WebSettings(BaseModel):
+    """Работа с сайтами и поиском."""
+
+    # Разрешить боту открывать сайты (инструмент fetch_url).
+    enabled: bool = False
+    # Разрешить поиск в интернете (инструмент web_search), если поиск настроен в .env.
+    search_enabled: bool = False
+    # Официальные сайты компании: бот может открывать их, чтобы брать актуальные цены и условия.
+    own_sites: list[str] = Field(default_factory=list)
+    # Лимиты на одно сообщение клиента: защита от долгих ответов и лишних расходов.
+    max_pages_per_message: int = 4
+    max_searches_per_message: int = 2
+    # Сколько символов текста страницы передавать модели.
+    max_page_chars: int = 6000
+
+
+class CompetitionSettings(BaseModel):
+    """Режим сравнения с конкурентами: бот всегда отстаивает свою компанию."""
+
+    enabled: bool = False
+    # Преимущества компании — ФАКТЫ, на которые бот опирается при сравнении.
+    our_advantages: list[str] = Field(default_factory=list)
+    # Проверять каждый ответ отдельным «контролёром» (+1 короткий запрос к модели на ответ).
+    guard: bool = True
+    # Дополнительные правила сравнения для этой компании.
+    extra_rules: str = ""
 
 
 class TenantSettings(BaseModel):
     """Все настройки компании. Каждый блок — отдельная часть промпта или поведения."""
 
     # --- Блоки промпта ---
+    # Название компании так, как его должен называть бот (например, «Jivo»).
+    company_name: str = ""
     bot_name: str = "Ассистент"
     # Роль: кто такой бот и что он делает.
     role: str = "Ты — вежливый консультант компании. Помогаешь клиентам."
@@ -70,6 +108,8 @@ class TenantSettings(BaseModel):
     # --- Поведение ---
     llm: LlmSettings = Field(default_factory=LlmSettings)
     texts: Texts = Field(default_factory=Texts)
+    web: WebSettings = Field(default_factory=WebSettings)
+    competition: CompetitionSettings = Field(default_factory=CompetitionSettings)
     # Показывать клиенту «бот печатает...», пока готовится ответ.
     show_typing: bool = True
     # Фото: после ответа photo_received перевести на оператора.

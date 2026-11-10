@@ -6,6 +6,7 @@
     -> собираем контекст: системный промпт + последние сообщения чата
     -> цикл: модель отвечает текстом ИЛИ просит вызвать инструменты
              (инструменты выполняем, результат отдаём модели, повторяем)
+    -> в режиме сравнения с конкурентами ответ проверяет контролёр (guard.py)
     -> возвращаем ПДн на место и отправляем ответ в Jivo
     -> при необходимости переводим на оператора
   Каждый шаг пишется в журнал.
@@ -13,13 +14,16 @@
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.guard import guard_answer
 from app.agent.prompts import build_system_prompt
-from app.agent.tools import ToolContext, get_tools
+from app.agent.registry import get_tools
+from app.agent.tools import ToolContext
 from app.db import SessionLocal
 from app.logs import console, write_log
 from app.models import ChatMessage, PiiValue, Tenant
@@ -115,11 +119,16 @@ async def _process_message(
     write_log(session, "client_message", {"text": masked_text}, tenant_id=tenant.id, chat_id=chat_id)
     await session.flush()  # отправить в БД, чтобы сообщение попало в историю ниже
 
-    if settings.show_typing:
-        await jivo.typing(token, chat_id, client_id)
+    # «Бот печатает…». Повторяем перед каждым шагом агента: изучение сайтов может занять
+    # полминуты, и без индикатора клиент решит, что бот завис.
+    async def show_typing() -> None:
+        if settings.show_typing:
+            await jivo.typing(token, chat_id, client_id)
+
+    await show_typing()
 
     # --- 2. Запускаем агента ---
-    result = await run_agent(services, session, tenant.id, settings, chat_id, client_id, vault)
+    result = await run_agent(services, session, tenant.id, settings, chat_id, client_id, vault, on_step=show_typing)
 
     # --- 3. Сохраняем всё и отправляем ответ ---
     save_vault(session, tenant.id, chat_id, vault)
@@ -145,18 +154,25 @@ async def run_agent(
     chat_id: str,
     client_id: str,
     vault: PiiVault,
+    on_step: Callable[[], Awaitable[None]] | None = None,
 ) -> AgentResult:
-    """Цикл «модель -> инструменты -> модель» до финального текстового ответа."""
-    tools = get_tools(settings)
+    """
+    Цикл «модель -> инструменты -> модель» до финального текстового ответа.
+    on_step — вызывается перед каждым повторным обращением к модели (показать «бот печатает…»).
+    """
+    tools = get_tools(settings, services)
     tools_by_name = {t.name: t for t in tools}
     tool_schemas = [t.schema() for t in tools]
     ctx = ToolContext(tenant_id=tenant_id, settings=settings, chat_id=chat_id, client_id=client_id,
-                      vault=vault, session=session)
+                      vault=vault, session=session, services=services)
 
-    messages = [{"role": "system", "content": build_system_prompt(settings)}]
-    messages += await load_history(session, tenant_id, chat_id, settings.llm.history_limit)
+    messages = [{"role": "system", "content": build_system_prompt(settings, tools_by_name.keys())}]
+    messages += await load_history(session, tenant_id, chat_id, settings.llm.history_limit,
+                                   tool_chars=settings.llm.history_tool_chars)
 
     for round_no in range(settings.llm.max_tool_rounds):
+        if round_no > 0 and on_step is not None:
+            await on_step()
         reply = await services.llm.chat(
             messages, tool_schemas,
             model=settings.llm.model, temperature=settings.llm.temperature, max_tokens=settings.llm.max_tokens,
@@ -170,6 +186,10 @@ async def run_agent(
         # Модель ответила текстом без инструментов — это финальный ответ.
         if not reply.tool_calls:
             text = reply.content or ""
+            # Режим сравнения с конкурентами: ответ проверяет контролёр и при необходимости
+            # заменяет. В историю чата попадает уже проверенный вариант.
+            if settings.competition.enabled and settings.competition.guard and text.strip():
+                text = await guard_answer(services.llm, session, settings, tenant_id, chat_id, messages, text)
             session.add(ChatMessage(tenant_id=tenant_id, chat_id=chat_id, role="assistant", content=text))
             return AgentResult(text=text, invite_agent=ctx.invite_agent, invite_reason=ctx.invite_reason)
 
@@ -207,22 +227,30 @@ async def _execute_tool(ctx: ToolContext, tools_by_name: dict, name: str, raw_ar
         result = f"Ошибка: инструмента {name} не существует."
     else:
         try:
-            # В инструмент передаём РЕАЛЬНЫЕ значения вместо меток ([PHONE_1] -> 79991234567)...
-            real_args = ctx.vault.unmask_obj(args)
-            result = await tool.handler(ctx, real_args)
+            # Внутренним инструментам (CRM) передаём РЕАЛЬНЫЕ значения вместо меток ([PHONE_1] -> 79991234567).
+            # Внешним (сайты, поиск) — нет: см. Tool.unmask_args.
+            tool_args = ctx.vault.unmask_obj(args) if tool.unmask_args else args
+            result = await tool.handler(ctx, tool_args)
         except Exception as e:  # noqa: BLE001
             console.exception("Ошибка инструмента %s", name)
             result = f"Ошибка при выполнении инструмента: {e}"
-        # ...а результат (например, ответ CRM с телефонами) маскируем, прежде чем отдать модели.
+        # Результат (ответ CRM, текст сайта) маскируем, прежде чем отдать модели.
         result = ctx.vault.mask(result)
 
-    write_log(ctx.session, "tool_call", {"tool": name, "args": args, "reason": reason, "result": result},
+    # В журнал — не больше 2000 символов результата: текст сайта целиком журналу не нужен.
+    write_log(ctx.session, "tool_call", {"tool": name, "args": args, "reason": reason, "result": result[:2000]},
               tenant_id=ctx.tenant_id, chat_id=ctx.chat_id)
     return result
 
 
-async def load_history(session: AsyncSession, tenant_id: int, chat_id: str, limit: int) -> list[dict]:
-    """Последние сообщения чата в формате API модели."""
+async def load_history(
+    session: AsyncSession, tenant_id: int, chat_id: str, limit: int, tool_chars: int = 1500
+) -> list[dict]:
+    """
+    Последние сообщения чата в формате API модели.
+    Результаты инструментов из прошлых сообщений обрезаются до tool_chars символов:
+    модель их уже использовала, а пересылать целые страницы сайтов в каждом запросе дорого.
+    """
     rows = list(await session.scalars(
         select(ChatMessage)
         .where(ChatMessage.tenant_id == tenant_id, ChatMessage.chat_id == chat_id)
@@ -237,7 +265,10 @@ async def load_history(session: AsyncSession, tenant_id: int, chat_id: str, limi
 
     history = []
     for r in rows:
-        item: dict = {"role": r.role, "content": r.content}
+        content = r.content
+        if r.role == "tool" and len(content) > tool_chars:
+            content = content[:tool_chars] + "\n…[обрезано: полный текст был в прошлом сообщении]"
+        item: dict = {"role": r.role, "content": content}
         if r.tool_calls:
             item["tool_calls"] = r.tool_calls
         if r.tool_call_id:

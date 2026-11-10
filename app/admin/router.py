@@ -9,12 +9,13 @@
 
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.prompts import build_system_prompt
+from app.agent.registry import get_tools
 from app.config import get_settings
 from app.db import get_session
 from app.models import LogEntry, Tenant
@@ -65,10 +66,12 @@ async def put_tenant_settings(slug: str, new: TenantSettings, session: AsyncSess
 
 
 @router.get("/tenants/{slug}/prompt")
-async def preview_prompt(slug: str, session: AsyncSession = Depends(get_session)):
-    """Посмотреть итоговый системный промпт, который получит модель."""
+async def preview_prompt(slug: str, request: Request, session: AsyncSession = Depends(get_session)):
+    """Посмотреть итоговый системный промпт и список инструментов, которые получит модель."""
     tenant = await _get_tenant(session, slug)
-    return {"prompt": build_system_prompt(load_settings(tenant.settings))}
+    settings = load_settings(tenant.settings)
+    tool_names = [t.name for t in get_tools(settings, request.app.state.services)]
+    return {"tools": tool_names, "prompt": build_system_prompt(settings, tool_names)}
 
 
 @router.get("/logs")

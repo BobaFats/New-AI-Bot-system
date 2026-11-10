@@ -19,18 +19,29 @@ from app.db import init_db
 from app.jivo.client import JivoClient
 from app.jivo.router import router as jivo_router
 from app.services import Services
+from app.web.fetcher import WebFetcher
+from app.web.search import build_search_provider
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Код до yield выполняется при старте сервера, после yield — при остановке."""
-    logging.basicConfig(level=get_settings().log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    settings = get_settings()
+    logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     await init_db()
     # Если сервисы уже подставлены (например, в тестах) — не перезаписываем.
     if not hasattr(app.state, "services"):
-        app.state.services = Services(llm=DeepSeekClient(), jivo=JivoClient())
+        app.state.services = Services(
+            llm=DeepSeekClient(),
+            jivo=JivoClient(),
+            web=WebFetcher(user_agent=settings.web_user_agent),
+            search=build_search_provider(settings),  # None, если поиск не настроен
+        )
     yield
-    await app.state.services.jivo.aclose()
+    services = app.state.services
+    await services.jivo.aclose()
+    if services.web is not None:
+        await services.web.aclose()
 
 
 app = FastAPI(title="AI Bot for Jivo", lifespan=lifespan)
