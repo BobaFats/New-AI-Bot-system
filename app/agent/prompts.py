@@ -86,7 +86,7 @@ def build_system_prompt(s: TenantSettings, tool_names: Collection[str] = ()) -> 
         parts.append(WEB_RULES.format(find_site=find_site))
         if s.web.own_sites:
             sites = "\n".join(f"- {url}" for url in s.web.own_sites)
-            parts.append(f"Официальные сайты {company} (открывай их для актуальных цен и условий):\n{sites}")
+            parts.append(f"Официальные сайты {company} (открывай их для актуальных цен, условий и инструкций):\n{sites}")
 
     if s.competition.enabled:
         parts.append(COMPETITION_RULES.format(company=company))

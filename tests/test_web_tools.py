@@ -112,3 +112,20 @@ async def test_old_tool_results_truncated_in_history(client, services):
     old_tool_result = next(m for m in services.llm.calls[2] if m["role"] == "tool")
     assert len(old_tool_result["content"]) < 300
     assert "обрезано" in old_tool_result["content"]
+
+
+async def test_fetch_url_find_puts_matching_links_first(client, services):
+    await set_tenant_settings(web={"enabled": True})
+    help_url = "https://help.example/"
+    many_links = [(f"Статья {i}", f"{help_url}a{i}.html") for i in range(40)]
+    many_links.append(("Интеграция с amoCRM", f"{help_url}amocrm.html"))
+    services.web.pages[help_url] = make_page(help_url, "База знаний", links=many_links)
+    services.llm.replies = [
+        tool_reply("fetch_url", f'{{"url": "{help_url}", "find": "amoCRM", "reason": "технический вопрос"}}'),
+        text_reply("Вот инструкция."),
+    ]
+    await client.post(f"/jivo/{TOKEN}", json=client_message("Как подключить amoCRM?"))
+    content = services.llm.calls[1][-1]["content"]
+    # Нужная ссылка была 41-й, но с find оказалась первой в списке.
+    assert content.index("amocrm.html") < content.index("a0.html")
+    assert "показано 15 из 41" in content

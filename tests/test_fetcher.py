@@ -147,3 +147,21 @@ async def test_cache_avoids_second_download():
     await f.fetch("https://rival.example/")
     await f.fetch("https://rival.example/")
     assert len(calls) == 1
+
+
+def test_select_links_by_keywords():
+    from app.web.fetcher import select_links
+
+    links = [
+        ("Тарифы", "https://site.example/pricing"),
+        ("Интеграция с Битрикс24", "https://site.example/help/bitrix-integrasia.html"),
+        ("Интеграция с amoCRM", "https://site.example/help/amocrm-integrasia.html"),
+        ("WordPress — установка кода чата", "https://site.example/help/wordpress.html"),
+    ]
+    # Без find — порядок как есть.
+    assert select_links(links, "", 2) == links[:2]
+    # С find — подходящие первыми; «интеграцию» находит «Интеграция» по началу слова.
+    assert select_links(links, "как настроить интеграцию amoCRM", 2)[0][0] == "Интеграция с amoCRM"
+    assert select_links(links, "установить на WordPress", 1) == [links[3]]
+    # Ничего не подошло — обычный порядок.
+    assert select_links(links, "Telegram", 2) == links[:2]

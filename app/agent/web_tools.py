@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from app.agent.tools import Tool, ToolContext
 from app.pii import PLACEHOLDER_RE
-from app.web.fetcher import FetchError, Page
+from app.web.fetcher import FetchError, Page, select_links
 from app.web.search import SearchError
 
 
@@ -23,8 +23,8 @@ def _sanitize(text: str) -> str:
     return text.replace("<<<", "‹‹‹").replace(">>>", "›››")
 
 
-def format_page(page: Page, max_chars: int) -> str:
-    """Текст страницы в виде, удобном для модели."""
+def format_page(page: Page, max_chars: int, find: str = "", max_links: int = 15) -> str:
+    """Текст страницы в виде, удобном для модели. find — слова для выбора нужных ссылок."""
     text = page.text[:max_chars]
     if len(page.text) > max_chars:
         text += "\n…[текст страницы обрезан]"
@@ -36,9 +36,15 @@ def format_page(page: Page, max_chars: int) -> str:
         "Текст:",
         _sanitize(text) or "(страница почти пустая — возможно, сайт показывает содержимое только в браузере)",
     ]
-    if page.links:
-        parts.append("Ссылки на другие страницы этого сайта:")
-        parts += [f"- {_sanitize(label)}: {url}" for label, url in page.links]
+    links = select_links(page.links, find, max_links)
+    if links:
+        total = len(page.links)
+        header = f"Ссылки на другие страницы этого сайта (показано {len(links)} из {total}"
+        header += f", сначала подходящие под «{_sanitize(find)}»):" if find else "):"
+        parts.append(header)
+        parts += [f"- {_sanitize(label)}: {url}" for label, url in links]
+        if total > len(links) and not find:
+            parts.append("Чтобы найти нужную ссылку среди остальных, открой страницу снова с параметром find.")
     parts.append("<<<КОНЕЦ СТРАНИЦЫ>>>")
     return "\n".join(p for p in parts if p)
 
@@ -51,12 +57,15 @@ async def _fetch_url(ctx: ToolContext, args: dict) -> str:
         return "Ошибка: в адресе есть метка персональных данных. Такие адреса открывать нельзя."
     if ctx.pages_opened >= ctx.settings.web.max_pages_per_message:
         return "Лимит открытия страниц на это сообщение исчерпан. Ответь по уже полученной информации."
+    find = str(args.get("find") or "").strip()
+    if PLACEHOLDER_RE.search(find):
+        find = ""  # метки персональных данных для поиска ссылок не нужны
     ctx.pages_opened += 1
     try:
         page = await ctx.services.web.fetch(url)
     except FetchError as e:
         return f"Не удалось открыть {url}: {e}."
-    return format_page(page, ctx.settings.web.max_page_chars)
+    return format_page(page, ctx.settings.web.max_page_chars, find=find)
 
 
 async def _web_search(ctx: ToolContext, args: dict) -> str:
@@ -87,10 +96,19 @@ FETCH_URL = Tool(
     description=(
         "Открыть веб-страницу и получить её текст и ссылки на другие страницы сайта. "
         "Используй, когда клиент присылает ссылку или называет сайт; когда нужны актуальные цены и условия "
-        "с официального сайта компании; чтобы перейти на нужный раздел (например, «Тарифы»)."
+        "с официального сайта компании; чтобы перейти на нужный раздел (например, «Тарифы»). "
+        "На больших страницах (база знаний, каталог) передай find — ключевые слова вопроса, "
+        "и в списке ссылок первыми будут подходящие."
     ),
     parameters={
-        "properties": {"url": {"type": "string", "description": "Полный адрес, начиная с http:// или https://"}},
+        "properties": {
+            "url": {"type": "string", "description": "Полный адрес, начиная с http:// или https://"},
+            "find": {
+                "type": "string",
+                "description": "Необязательно. Ключевые слова для поиска нужных ссылок на странице, "
+                               "например «amoCRM интеграция» или «установка WordPress».",
+            },
+        },
         "required": ["url"],
     },
     handler=_fetch_url,

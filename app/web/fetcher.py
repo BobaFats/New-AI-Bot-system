@@ -56,7 +56,9 @@ class Page:
     title: str
     description: str
     text: str
-    links: list[tuple[str, str]]  # (текст ссылки, адрес)
+    # (текст ссылки, адрес) — все ссылки на этом же сайте (до 300), важные первыми.
+    # Модели показывается только часть, см. select_links().
+    links: list[tuple[str, str]]
     fetched_at: float  # время загрузки (unix time)
 
 
@@ -172,7 +174,7 @@ async def _read_limited(resp: httpx.Response, limit: int) -> bytes:
     return b"".join(chunks)
 
 
-def parse_page(body: bytes, url: str, charset: str | None = None, plain: bool = False, max_links: int = 15) -> Page:
+def parse_page(body: bytes, url: str, charset: str | None = None, plain: bool = False, max_links: int = 300) -> Page:
     """Превращает HTML в заголовок, описание, чистый текст и список ссылок."""
     if plain:
         text = body.decode(charset or "utf-8", errors="replace")
@@ -212,6 +214,29 @@ def _main_text(soup: BeautifulSoup) -> str:
     if root is None or len(root.get_text(strip=True)) < 200:
         root = soup.body or soup
     return _clean_text(root.get_text("\n"))
+
+
+def select_links(links: list[tuple[str, str]], find: str = "", limit: int = 15) -> list[tuple[str, str]]:
+    """
+    Выбирает, какие ссылки страницы показать модели.
+
+    Без find — первые limit ссылок (важные: тарифы, возможности... — уже впереди).
+    С find — сначала ссылки, в тексте или адресе которых есть слова из find.
+    Слова сравниваются по первым 5 буквам, чтобы находились разные формы:
+    «интеграция» найдёт «Интеграции с CRM», «подключить» найдёт «Подключение…».
+    """
+    words = [w for w in re.findall(r"\w+", find.lower()) if len(w) >= 3]
+    if not words:
+        return links[:limit]
+    stems = [w[:5] for w in words]
+
+    def score(link: tuple[str, str]) -> int:
+        haystack = f"{link[0]} {urlsplit(link[1]).path}".lower()
+        return sum(1 for s in stems if s in haystack)
+
+    matched = sorted((l for l in links if score(l) > 0), key=score, reverse=True)  # sorted сохраняет порядок равных
+    rest = [l for l in links if score(l) == 0]
+    return (matched + rest)[:limit]
 
 
 def _clean_text(text: str) -> str:
